@@ -1,0 +1,159 @@
+<<f087b216-4c7c-41aa-a9a7-cc6b8893a02a>>
+* TDA of financial time series
+This web app is a reimplementation of the paper
+[[https://arxiv.org/abs/1703.04385][TDA of financial time series:
+Landscapes of crashes]] using [[https://gudhi.inria.fr][gudhi]].
+
+Select a start and an end date (default one is to visualize the dotcom
+crash). You can visualize:
+
+- *dotcom* crash : start=03/10/1999 (10th of march), end = 03/10/2000
+- *Lehman brothers* crash : start=09/15/2007 (15th of september), end =
+  09/15/2008.
+
+In the publication, they use a 250 days (a little bit more than 1 year).
+You can set smaller date range if you find the computation not fast
+enough.
+
+#+begin_src jupyter-python
+# Some basic data science imports
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.pipeline import Pipeline
+import datetime
+
+import time
+import os
+
+# Some gudhi imports for TDA
+from tda_pipeline import DataSelector, RipsPersistence, LPNorm
+from gudhi.representations import Landscape
+
+# Some graphical imports for the web app
+import ipywidgets as widgets
+import plotly.graph_objects as go
+
+# Some imports for ipywidgets
+from ipywidgets import DatePicker, BoundedIntText, ToggleButton, Text, HBox, VBox
+from IPython.display import display
+
+# cf. data_generation.py
+df = pd.read_csv('latest.csv', index_col=0)
+
+# min, max and default start values taken from the dataset - Python 3.7+
+min_value = datetime.date.fromisoformat(df.index[0])
+max_value = datetime.date.fromisoformat(df.index[-1])
+
+last_year = max_value - datetime.timedelta(days=250)
+
+# Widgets
+start = DatePicker(description='start', value = last_year)
+end   = DatePicker(description='end', value = max_value)
+window = BoundedIntText(value=50, min=10, max=100, step=1, description='Windows size')
+
+button = ToggleButton(description='Compute', icon='cogs')
+
+def nearest_str_date(items, pivot):
+    return min(items, key=lambda str_date: abs(datetime.date.fromisoformat(str_date) - pivot))
+
+def compute_Lp_norms():
+    w=int(window.value)
+    start_idx = df.index.get_loc(str(nearest_str_date(df.index, start.value - datetime.timedelta(days=w))))
+    end_idx = df.index.get_loc(str(nearest_str_date(df.index, end.value)))
+    # Some error management
+    if start_idx == end_idx:
+        raise IndexError('Start date must be different from end date.')
+    if end_idx < w:
+        end_idx = w
+    if end_idx < start_idx:
+        start_idx, end_idx = end_idx, start_idx
+
+    pipe = Pipeline(
+        [
+            ("data_sel", DataSelector(start=start_idx, end=end_idx, w=w)),
+            ("rips_pers", RipsPersistence(max_rips_dimension=2, max_persistence_dimension=2, only_this_dim=1, n_jobs=-1)),
+            ("landscape", Landscape(resolution=1000)),
+            ("lpnorm", LPNorm(n_jobs=-1)),
+            ("mms", MinMaxScaler()),
+        ]
+    )
+
+    start_chrono = float(time.time())
+    #os.write(1, bytes(str(start_chrono),'UTF-8') + b'\r\n')
+    L1L2mms = pipe.fit_transform(df)
+    stop_chrono = float(time.time())
+    #os.write(1, bytes(str(stop_chrono),'UTF-8') + b'\r\n')
+    os.write(1, bytes(str(stop_chrono - start_chrono),'UTF-8') + b' sec. \r\n')
+    
+    l1l2df = pd.DataFrame({'date': df[start_idx+w:end_idx].index, 'L1': L1L2mms.transpose()[0], 'L2': L1L2mms.transpose()[1]})
+    # Calculate the variance for the L norms
+    j = 0
+
+    for i in l1l2df.index:
+        if j < w:
+            k = 0
+        else:
+            k = j - w
+        l1l2df.loc[i, 'L1_variance'] = np.var(l1l2df.iloc[k:j].L1)
+        l1l2df.loc[i, 'L2_variance'] = np.var(l1l2df.iloc[k:j].L2)
+        j += 1
+        
+    return l1l2df
+
+def compute(args):
+    l1l2df = compute_Lp_norms()
+    fig.data[0]['x'] = l1l2df['date']
+    fig.data[0]['y'] = l1l2df['L1']
+    fig.data[1]['x'] = l1l2df['date']
+    fig.data[1]['y'] = l1l2df['L2']
+    fig.data[2]['x'] = l1l2df['date']
+    fig.data[2]['y'] = l1l2df['L1_variance']
+    fig.data[3]['x'] = l1l2df['date']
+    fig.data[3]['y'] = l1l2df['L2_variance']
+    
+button.observe(compute, 'value')
+
+# Layout
+left_box = HBox([start, end, window, button])
+
+fig = go.FigureWidget()
+
+l1l2df = compute_Lp_norms()
+fig.add_scatter(x=l1l2df['date'], y=l1l2df['L1'], mode='lines', name='L1')
+fig.add_scatter(x=l1l2df['date'], y=l1l2df['L2'], mode='lines', name='L2')
+fig.add_scatter(x=l1l2df['date'], y=l1l2df['L1_variance'], mode='lines', name='L1_variance')
+fig.add_scatter(x=l1l2df['date'], y=l1l2df['L2_variance'], mode='lines', name='L2_variance')
+fig.update_xaxes(dtick="M1", tickformat="%b\n%Y")
+fig.layout.title.text = 'Lp norms'
+
+display(left_box)
+fig
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: [0;31m---------------------------------------------------------------------------[0m
+: [0;31mModuleNotFoundError[0m                       Traceback (most recent call last)
+: Cell [0;32mIn[47], line 13[0m
+: [1;32m      9[0m [38;5;28;01mimport[39;00m [38;5;21;01mos[39;00m
+: [1;32m     11[0m [38;5;66;03m# Some gudhi imports for TDA[39;00m
+: [0;32m---> 13[0m [38;5;28;01mimport[39;00m [38;5;21;01mtda_pipeline[39;00m
+: [1;32m     14[0m [38;5;28;01mfrom[39;00m [38;5;21;01mtda_pipeline[39;00m [38;5;28;01mimport[39;00m DataSelector, RipsPersistence, LPNorm
+: [1;32m     15[0m [38;5;28;01mfrom[39;00m [38;5;21;01mgudhi[39;00m[38;5;21;01m.[39;00m[38;5;21;01mrepresentations[39;00m [38;5;28;01mimport[39;00m Landscape
+:
+: [0;31mModuleNotFoundError[0m: No module named 'tda_pipeline'
+:END:
+
+#+begin_example
+0.05286908149719238 sec. 
+#+end_example
+
+#+begin_src json
+{"model_id":"033ce67d40c94bd48547448543c589e6","version_major":2,"version_minor":0}
+#+end_src
+
+#+begin_src json
+{"model_id":"019d54a73d104cd382f8a99257d78f40","version_major":2,"version_minor":0}
+#+end_src
